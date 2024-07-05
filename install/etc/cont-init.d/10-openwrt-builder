@@ -1,0 +1,9 @@
+#!/command/with-contenv bash
+
+source /assets/functions/00-container
+prepare_service single
+PROCESS_NAME="openwrt-builder"
+
+print_info "Type 'openwrt_builder' from a shell prompt to build images to '/data/builds'"
+
+liftoff

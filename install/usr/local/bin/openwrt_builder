@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+
+PACKAGES=" \
+        -wpad-basic-mbedtls \
+        -ath10k-firmware-qca4019-ct \
+        -ath10k-firmware-qca9888-ct \
+        ath10k-firmware-qca4019 \
+        ath10k-firmware-qca9888 \
+        -kmod-ath10k-ct \
+        kmod-ath10k \
+        bash \
+        batctl-full \
+        curl \
+        iperf3 \
+        kitty-terminfo \
+        kmod-batman-adv \
+        luci \
+        luci-app-watchcat \
+        luci-proto-batman-adv \
+        luci-ssl \
+        -mesh11sd \
+        nano \
+        speedtestpp \
+        watchcat \
+        wpad-wolfssl \
+         "
+
+FILES=""
+DISABLED_SERVICES=""
+
+start_dir=$(pwd)
+build_image() {
+    echo "** Building OpenWRT ${VERSION} for ${PROFILE}"
+    make image \
+         PROFILE="${PROFILE}" \
+         PACKAGES="${PACKAGES}" \
+         FILES="${FILES}" \
+         DISABLED_SERVICES="${DISABLED_SERVICES}"
+}
+
+if [ -z $1 ] ; then
+    cat <<EOF
+
+** OpenWRT Image Builder
+
+This will build a custom OpenWRT image with additional packages, specifically to support Mesh Networking
+
+Usage:
+
+$(basename $0) ACTION MODEL
+
+ACTION:
+#  - download   - This will download a fresh copy of the image builder
+  - build      - This will build a fresh copy of OpenWRT
+
+MODEL:
+  - asus       - Asus MAP AC-2200 (Lyra)
+  - linksys    - Linksys VELOP WHW01
+  - wavlink    - Wavlink D6
+
+EOF
+fi
+
+if [ -n "${1}" ] ; then
+    mkdir -p /data/builds
+    build_date=$(TZ=${TIMEZONE} date +%Y%m%d-%H%M%S)
+    case "${1}" in
+        asus )
+            cd /src/ipq40xx
+            mkdir -p tmp
+            PROFILE="asus_map-ac2200"
+            build_image
+            mv bin/targets/ipq40xx/generic /data/builds/${build_date}-asus_map_ac2200
+            echo "The File is /data/builds/${build_date}-asus_map_ac2200"
+        ;;
+        linksys )
+            cd /src/ipq40xx
+            mkdir -p tmp
+            PROFILE="linksys_whw01"
+            build_image
+            mv bin/targets/ipq40xx/generic /data/builds/${build_date}-linksys_whw01
+            echo "The File is /data/builds/${build_date}-linksys_whw01"
+        ;;
+        wavlink )
+            cd /src/ramips_mt7621
+            mkdir -p tmp
+            PROFILE="wavlink_wl-wn531a6"
+            build_image
+            mv bin/targets/ramips/mt7621 /data/builds/${build_date}-wavilnk_d6_ramips_mt7621
+        ;;
+    esac
+    cd ${start_dir}
+fi
