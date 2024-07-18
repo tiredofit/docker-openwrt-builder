@@ -1,0 +1,17 @@
+services:
+
+  openwrt-builder-app:
+    image: tiredofit/openwrt-builder:latest
+    container_name: openwrt-builder-app
+    volumes:
+      - ./data:/data
+    environment:
+      - TIMEZONE=America/Vancouver
+      - CONTAINER_NAME=openwrt-builder-app
+    networks:
+      - services
+    restart: always
+
+networks:
+  services:
+    external: true
