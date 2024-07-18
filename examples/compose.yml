@@ -5,7 +5,6 @@ services:
     container_name: openwrt-builder-app
     volumes:
       - ./data:/data
-      - ./logs:/www/logs
     environment:
       - TIMEZONE=America/Vancouver
       - CONTAINER_NAME=openwrt-builder-app
