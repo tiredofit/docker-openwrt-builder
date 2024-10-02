@@ -1,3 +1,10 @@
+## 23.05.5-1.0.0 2024-10-02 <dave at tiredofit dot ca>
+
+   ### Added
+      - OpenWRT 23.05.5
+      - Switch repo filsystem from install -> rootfs
+
+
 ## 23.05.4-1.0.0 2024-07-17 <dave at tiredofit dot ca>
 
    ### Added
