@@ -7,7 +7,7 @@ LABEL maintainer="Dave Conroy (github.com/tiredofit)"
 ARG OPENWRT_VERSION
 ARG OPENWRT_CHIPSET
 
-ENV OPENWRT_VERSION=${OPENWRT_VERSION:-"23.05.4"} \
+ENV OPENWRT_VERSION=${OPENWRT_VERSION:-"23.05.5"} \
     OPENWRT_CHIPSET=${OPENWRT_CHIPSET:-"ipq40xx"} \
     CONTAINER_ENABLE_MESSAGING=FALSE \
     CONTAINER_PROCESS_RUNAWAY_PROTECTOR=FALSE \
@@ -48,4 +48,4 @@ RUN source /assets/functions/00-container && \
         fi ; \
     done ;
 
-ADD install/ /
+COPY rootfs/ /
