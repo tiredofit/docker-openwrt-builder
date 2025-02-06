@@ -1,5 +1,5 @@
 ARG DISTRO="alpine"
-ARG DISTRO_VARIANT="3.20"
+ARG DISTRO_VARIANT="3.21"
 
 FROM docker.io/tiredofit/${DISTRO}:${DISTRO_VARIANT}
 LABEL maintainer="Dave Conroy (github.com/tiredofit)"
@@ -7,7 +7,7 @@ LABEL maintainer="Dave Conroy (github.com/tiredofit)"
 ARG OPENWRT_VERSION
 ARG OPENWRT_CHIPSET
 
-ENV OPENWRT_VERSION=${OPENWRT_VERSION:-"23.05.5"} \
+ENV OPENWRT_VERSION=${OPENWRT_VERSION:-"24.10.0"} \
     OPENWRT_CHIPSET=${OPENWRT_CHIPSET:-"ipq40xx"} \
     CONTAINER_ENABLE_MESSAGING=FALSE \
     CONTAINER_PROCESS_RUNAWAY_PROTECTOR=FALSE \
@@ -42,7 +42,7 @@ RUN source /assets/functions/00-container && \
     for chipset in $(echo ${OPENWRT_CHIPSET} | sed -e "s|, |,|g" -e "s| |,|g" | tr "," "\n") ; do \
         mkdir -p /src/${chipset}/ && \
         if [ ${OPENWRT_VERSION} != "snapshot" ] ; then \
-            curl -sSL https://downloads.openwrt.org/"${_url_prefix}"${chipset}/generic/openwrt-imagebuilder-${OPENWRT_VERSION}-${chipset}-generic.Linux-x86_64.tar.xz | tar xfaJ - --strip 1 -C /src/${chipset}/ ; \
+            curl -sSL https://downloads.openwrt.org/"${_url_prefix}"${chipset}/generic/openwrt-imagebuilder-${OPENWRT_VERSION}-${chipset}-generic.Linux-x86_64.tar.zst | tar --zstd -xvf - --strip 1 -C /src/${chipset}/ ; \
         else \
             curl -sSL https://downloads.openwrt.org/"${_url_prefix}"${chipset}/generic/openwrt-imagebuilder-${chipset}-generic.Linux-x86_64.tar.zst | tar xfa - --zstd --strip 1 -C /src/${chipset}/ ; \
         fi ; \

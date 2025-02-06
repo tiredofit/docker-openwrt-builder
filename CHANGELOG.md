@@ -1,3 +1,10 @@
+## 24.10.0-1.0.2 2025-02-05 <dave at tiredofit dot ca>
+
+   ### Added
+      - Switch to alpine:3.21 base
+      - OpenWRT Builder 24.10.0
+
+
 ## 23.05.5-1.0.1 2024-10-02 <dave at tiredofit dot ca>
 
    ### Added
