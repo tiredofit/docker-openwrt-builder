@@ -1,3 +1,9 @@
+## 24.10.2 2025-06-24 <dave at tiredofit dot ca>
+
+   ### Added
+      - OpenWRT 24.10.2
+
+
 ## 24.10.1 2025-04-15 <dave at tiredofit dot ca>
 
    ### Added
