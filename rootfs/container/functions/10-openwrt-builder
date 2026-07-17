@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: © 2026 Nfrastack <code@nfrastack.com>
+#
+# SPDX-License-Identifier: MIT
+
+openwrt_builder_bootstrap() {
+    create_folder "${DATA_PATH}" openwrt:openwrt 775
+    create_folder "${DATA_PATH%/}/builds" openwrt:openwrt 775
+}

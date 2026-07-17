@@ -1,0 +1,24 @@
+#!/bin/sh /etc/rc.common
+# SPDX-FileCopyrightText: © 2026 Nfrastack <code@nfrastack.com>
+#
+# SPDX-License-Identifier: MIT
+
+# Applies user ebtables rules from /etc/ebtables.d/*.conf
+# on boot if /.persist flag exists.
+
+START=99
+
+boot() {
+    [ -f /etc/ebtables.d/.persist ] || return 0
+    [ -d /etc/ebtables.d ] || return 0
+    for f in /etc/ebtables.d/*.conf; do
+        [ -f "$f" ] || continue
+        while IFS= read -r line; do
+            line="${line#"${line%%[![:space:]]*}"}"
+            [ -z "$line" ] && continue
+            case "$line" in \#*) continue ;; esac
+            ebtables $line 2>/dev/null
+        done < "$f"
+    done
+    return 0
+}

@@ -1,0 +1,133 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: © 2026 Nfrastack <code@nfrastack.com>
+#
+# SPDX-License-Identifier: MIT
+
+_ow=$(awk -F"'" '/DISTRIB_RELEASE/{v=$2} /DISTRIB_REVISION/{r=$2} END{print v, r}' /etc/openwrt_release 2>/dev/null)
+_uptime=$(uptime | sed 's/.*up //; s/,.*//')
+_host=$(cat /proc/sys/kernel/hostname)
+_build=$(cat /etc/buildinfo 2>/dev/null)
+
+echo ""
+echo "  ${_host}  ---  ${_ow}" -- Uptime: ${_uptime}
+if [ -n "${_build}" ]; then  echo "  Built: ${_build}" ; fi
+echo ""
+
+echo "  Interface               VLAN  IP"
+echo "  -------------------------------------------------------------------"
+ip a | awk '
+  /^[0-9]+:.*state UP/ {
+    if (iface != "") print iface, vlan, ip
+    split($2,a,"@")
+    iface=a[1]; sub(/:$/,"",iface)
+    if (iface ~ /^phy/) { iface=""; next }
+    vlan=""; ip="-"
+    if (iface ~ /^br-lan\./) { split(iface,b,"."); vlan=b[2] }
+    else if (iface ~ /^br-lan$/) vlan="-"
+    else if (iface ~ /^eth/) vlan="-"
+  }
+  /inet / && iface {ip=$2}
+  END {if (iface != "") print iface, vlan, ip}
+' | sort -t. -k2 -n | while read _i _v _p; do
+  printf "  %-24s %-6s %s\n" "${_i}" "${_v}" "${_p}"
+done
+echo ""
+
+printf "  %-22s %-5s %4s %8s %5s %5s %5s  %s\n" "SSID" "State" "Ch" "Freq" "Width" "Power" "Clts" "Network"
+printf "  %s\n" "----------------------------------------------------------------------"
+# map UCI wifi-iface order to phy interfaces (for firmwares without ifname in UCI)
+_wiphy0=""; _wiphy1=""; _cur=""
+while IFS= read -r _l; do
+  case "$_l" in
+    phy#0) _cur=0 ;;
+    phy#1) _cur=1 ;;
+    *Interface*)
+      _n=$(echo "$_l" | awk '{print $2}')
+      [ "$_cur" = 0 ] && _wiphy0="${_wiphy0} ${_n}" || _wiphy1="${_wiphy1} ${_n}" ;;
+  esac
+done << IWEOF
+$(iw dev 2>/dev/null)
+IWEOF
+_ap0=0; _ap1=0
+i=0
+while uci get "wireless.@wifi-iface[$i]" >/dev/null 2>&1; do
+  ssid=$(uci get "wireless.@wifi-iface[$i].ssid" 2>/dev/null)
+  net=$(uci get "wireless.@wifi-iface[$i].network" 2>/dev/null)
+  device=$(uci get "wireless.@wifi-iface[$i].device" 2>/dev/null)
+  iface=$(uci get "wireless.@wifi-iface[$i].ifname" 2>/dev/null)
+  if [ -z "$iface" ]; then
+    if [ "$device" = "radio0" ]; then
+      iface=$(echo $_wiphy0 | awk -v n=$_ap0 '{print $(n+1)}'); _ap0=$((_ap0+1))
+    else
+      iface=$(echo $_wiphy1 | awk -v n=$_ap1 '{print $(n+1)}'); _ap1=$((_ap1+1))
+    fi
+  fi
+
+  if [ -n "$iface" ] && ip link show "$iface" 2>/dev/null | grep -q "state UP"; then
+    state="UP"
+  else
+    state="DOWN"
+  fi
+
+  clients=$(iw dev "$iface" station dump 2>/dev/null | grep -c "^Station")
+
+  _iw=$(iw dev "$iface" info 2>/dev/null)
+  _ch=$(echo "$_iw" | sed -n 's/.*channel \([0-9]*\).*/\1/p')
+  _freq=$(echo "$_iw" | sed -n 's/.*(\([0-9]*\) MHz).*/\1/p')
+  _width=$(echo "$_iw" | sed -n 's/.*width: *\([^,]*\).*/\1/p')
+  _txp=$(echo "$_iw" | awk '/txpower/ {printf "%.0f", $2}')
+
+  if [ -z "$_ch" ]; then
+    _ch="-"
+  fi
+  if [ -z "$_freq" ]; then
+    _freq_disp="-"
+  else
+    _freq_disp="${_freq}MHz"
+  fi
+  if [ -z "$_width" ]; then
+    _width="-"
+  fi
+  if [ -z "$_txp" ]; then
+    _txp_disp="-"
+  else
+    _txp_disp="${_txp}dBm"
+  fi
+
+  printf "  %-22s %-5s %4s %8s %5s %5s %5s  %s\n" "${ssid}" "${state}" "${_ch}" "${_freq_disp}" "${_width}" "${_txp_disp}" "${clients}" "${net}"
+  i=$((i+1))
+done
+echo ""
+
+echo "  Watchdog"
+echo "  -------------------------------------------------------------------------"
+i=0
+while uci get "watchcat.@watchcat[${i}]" >/dev/null 2>&1; do
+  name=$(uci get "watchcat.@watchcat[${i}].description" 2>/dev/null)
+  hosts=$(uci get "watchcat.@watchcat[${i}].pinghosts" 2>/dev/null)
+  period=$(uci get "watchcat.@watchcat[${i}].ping_interval" 2>/dev/null)
+  fails=$(uci get "watchcat.@watchcat[${i}].ping_failures" 2>/dev/null)
+  delay=$(uci get "watchcat.@watchcat[${i}].forcedelay" 2>/dev/null)
+  iface=""; [ -n "$name" ] && iface=$(uci get network.${name}.device 2>/dev/null)
+  if [ -z "$iface" ]; then
+    iface="?"
+  fi
+  printf "  %-18s  %-18s  every %-5s  reboot x%s  %ss delay\n" "${iface}" "${hosts}" "${period:-1m}" "${fails:-3}" "${delay:-15}"
+  i=$((i+1))
+done
+if [ "$i" = "0" ]; then
+  echo "  (disabled)"
+fi
+echo ""
+
+#echo "  Clients"
+#echo "-----------------------------------------------------------------------"
+#total=0
+#for w in /sys/class/net/phy*-ap*; do
+#  [ -d "$w" ] || continue
+#  name=$(basename "$w")
+#  n=$(iw dev "$name" station dump 2>/dev/null | grep -c "^Station")
+#  total=$((total + n))
+#done
+#echo "  ${total} WiFi client(s) connected"
+#echo ""

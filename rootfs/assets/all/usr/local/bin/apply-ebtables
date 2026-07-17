@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: © 2026 Nfrastack <code@nfrastack.com>
+#
+# SPDX-License-Identifier: MIT
+
+# Apply ebtables rules from flat files in /etc/ebtables.d/
+# One rule per line, same args as ebtables without leading "ebtables"
+#
+# Example /etc/ebtables.d/10-allow-hue.conf:
+#   -A FORWARD -p IPv4 --ip-src 10.68.0.0/16 --ip-dst 10.68.1.153 -j ACCEPT
+#   -A FORWARD -p IPv4 --ip-src 10.68.1.153 --ip-dst 10.68.0.0/16 -j ACCEPT
+#
+# Lines starting with # are ignored. Empty lines are ignored.
+#
+# Usage:
+#   apply-ebtables              # session only (lost on reboot)
+#   apply-ebtables --save       # apply + persist across reboot
+#   apply-ebtables --forget     # remove persist flag (current session keeps running)
+#   apply-ebtables --show       # show what would be applied
+#   apply-ebtables --status     # show current live rules
+#   apply-ebtables --flush      # flush FORWARD chain (caution)
+
+RULES_DIR="/etc/ebtables.d"
+PERSIST_FILE="${RULES_DIR}/.persist"
+
+usage() {
+    cat <<EOF
+Usage: $(basename $0) [--save|--forget|--show|--status|--flush]
+
+Apply ebtables rules from ${RULES_DIR}/*.conf
+
+  (no flag)   Apply rules — session only (lost on reboot)
+  --save      Apply rules AND persist across reboot
+  --forget    Remove persist flag (rules still active until reboot)
+  --show      Print the rules that would be applied
+  --status    Show current live ebtables FORWARD rules
+  --flush     Flush FORWARD chain (removes all rules)
+EOF
+    exit 0
+}
+
+[ "$1" = "--help" ] && usage
+[ "$1" = "-h" ] && usage
+
+if [ "$1" = "--status" ]; then
+    ebtables -L FORWARD --Lc 2>/dev/null || echo "FORWARD chain: empty or not available"
+    [ -f "${PERSIST_FILE}" ] && echo "Persist: ON (re-applied on boot)" || echo "Persist: OFF (session only)"
+    exit 0
+fi
+
+if [ "$1" = "--forget" ]; then
+    rm -f "${PERSIST_FILE}" 2>/dev/null
+    echo "Persist flag removed. Rules still active until reboot."
+    exit 0
+fi
+
+if [ "$1" = "--flush" ]; then
+    echo "Flushing FORWARD chain..."
+    ebtables -F FORWARD 2>/dev/null || true
+    rm -f "${PERSIST_FILE}" 2>/dev/null
+    echo "Flushed + persist removed."
+    exit 0
+fi
+
+# Parse --save flag
+_PERSIST=0
+if [ "$1" = "--save" ]; then
+    _PERSIST=1
+    shift
+fi
+
+if [ ! -d "${RULES_DIR}" ]; then
+    echo "ebtables: ${RULES_DIR} not found, nothing to apply"
+    exit 0
+fi
+
+FILES=($(ls "${RULES_DIR}"/*.conf 2>/dev/null))
+if [ ${#FILES[@]} -eq 0 ]; then
+    echo "ebtables: no .conf files in ${RULES_DIR}, nothing to apply"
+    exit 0
+fi
+
+RULES=()
+for f in "${FILES[@]}"; do
+    while IFS= read -r line; do
+        line="${line#"${line%%[![:space:]]*}"}"
+        [ -z "${line}" ] && continue
+        [[ "${line}" == \#* ]] && continue
+        RULES+=("${line}")
+    done < "${f}"
+done
+
+if [ "$1" = "--show" ]; then
+    echo "Rules that would be applied (${#RULES[@]} total):"
+    for r in "${RULES[@]}"; do
+        echo "  ebtables ${r}"
+    done
+    exit 0
+fi
+
+echo "ebtables: applying ${#RULES[@]} rules from ${RULES_DIR}/*.conf"
+for r in "${RULES[@]}"; do
+    ebtables ${r} 2>/dev/null || echo "  FAILED: ebtables ${r}"
+done
+
+if [ "${_PERSIST}" = "1" ]; then
+    touch "${PERSIST_FILE}"
+    echo "ebtables: persist ON — will re-apply on boot"
+else
+    echo "ebtables: session only (lost on reboot)"
+fi
+echo "ebtables: done"

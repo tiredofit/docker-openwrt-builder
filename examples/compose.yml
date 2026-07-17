@@ -1,13 +1,77 @@
 services:
-
   openwrt-builder-app:
-    image: tiredofit/openwrt-builder:latest
+    image: docker.io/nfrastack/openwrt_builder
     container_name: openwrt-builder-app
     volumes:
       - ./data:/data
     environment:
       - TIMEZONE=America/Vancouver
-      - CONTAINER_NAME=openwrt-builder-app
+
+      - ROOT_PASSWORD=changeme
+
+      # -- AP MAC -> Hostname (up to 99 entries), all optional) ---
+      # - AP_01_MAC=AA:BB:CC:DD:EE:01
+      # - AP_01_HOSTNAME=ap1
+
+      # --- VLANs (add up to 99) ---
+      # tagged = 802.1q header on the uplink (default). Set TAGGED=false for native/untagged VLAN.
+      - NETWORK_01_VLAN=1
+      - NETWORK_01_NAME=MGMT
+      - NETWORK_01_NETWORK=192.168.1
+      - NETWORK_01_MASK=255.255.255.0
+      - NETWORK_01_GATEWAY=192.168.1.1
+      - NETWORK_01_DNS=192.168.1.1
+
+      - NETWORK_02_VLAN=100
+      - NETWORK_02_NAME=DATA
+      - NETWORK_02_NETWORK=10.0.100
+      - NETWORK_02_MASK=255.255.255.0
+      - NETWORK_02_GATEWAY=10.0.100.1
+      - NETWORK_02_DNS=10.0.100.1
+
+      - NETWORK_03_VLAN=200
+      - NETWORK_03_NAME=IOT
+      - NETWORK_03_NETWORK=10.0.200
+      - NETWORK_03_MASK=255.255.255.0
+      - NETWORK_03_GATEWAY=10.0.200.1
+      - NETWORK_03_DNS=10.0.200.1
+      - NETWORK_03_EB_ENABLED=true
+      - NETWORK_03_EB_ALLOW=10.0.200.50
+      - NETWORK_03_WATCHCAT=true
+
+      - NETWORK_04_VLAN=300
+      - NETWORK_04_NAME=GUEST
+      - NETWORK_04_NETWORK=10.0.300
+      - NETWORK_04_MASK=255.255.255.0
+      - NETWORK_04_GATEWAY=10.0.300.1
+      - NETWORK_04_DNS=10.0.300.1
+
+      # --- SSIDs ---
+      - SSID_01_BAND=5g
+      - SSID_01_NAME=MyNetwork-5G
+      - SSID_01_NETWORK=DATA
+      - SSID_01_KEY=supersecret123
+      - SSID_01_MOBILITY_DOMAIN=0001
+
+      - SSID_02_BAND=both
+      - SSID_02_NAME=MyNetwork-IOT
+      - SSID_02_NETWORK=IOT
+      - SSID_02_KEY=iotsecret123
+      - SSID_02_MOBILITY_DOMAIN=0002
+      - SSID_02_IE_R=0
+      - SSID_02_IE_K=0
+
+      - SSID_03_BAND=5g
+      - SSID_03_NAME=MyNetwork-Guest
+      - SSID_03_NETWORK=GUEST
+      - SSID_03_KEY=guestwelcome
+      - SSID_03_MOBILITY_DOMAIN=0003
+
+      # --- Dawn roaming (optional) ---
+      # - DAWN_BROADCAST_IP=255.255.255.255
+      # - DAWN_SHARED_KEY=changeme-shared-key
+      # - DAWN_IV=changeme-init-vector
+      # - DAWN_USE_SYMM_ENC=1
     networks:
       - services
     restart: always

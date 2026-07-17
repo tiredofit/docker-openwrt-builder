@@ -1,3 +1,11 @@
+## 25.12.5 - 2026-07-14 <code at nfrastack dot com>
+
+   ### Changed
+      - Port from tiredofit to nfrastack base image
+      - OpenWRT 25.12.5
+      - Add Cudy Support
+      - Add Profiles support in bulder
+
 ## 24.10.2 2025-06-24 <dave at tiredofit dot ca>
 
    ### Added

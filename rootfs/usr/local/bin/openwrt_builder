@@ -1,41 +1,568 @@
-#!/usr/bin/env bash
+#!/command/with-contenv bash
+# SPDX-FileCopyrightText: © 2026 Nfrastack <code@nfrastack.com>
+#
+# SPDX-License-Identifier: MIT
 
-PACKAGES=" \
-            -wpad-basic-mbedtls \
-            -ath10k-firmware-qca4019-ct \
-            -ath10k-firmware-qca9888-ct \
-            ath10k-firmware-qca4019 \
-            ath10k-firmware-qca9888 \
-            -kmod-ath10k-ct \
-            kmod-ath10k \
-            bash \
-            batctl-full \
-            curl \
-            iperf3 \
-            kitty-terminfo \
-            kmod-batman-adv \
-            luci \
-            luci-app-watchcat \
-            luci-proto-batman-adv \
-            luci-ssl \
-            -mesh11sd \
-            nano \
-            speedtestpp \
-            watchcat \
-            wpad-wolfssl \
-         "
+FILES="/assets/openwrt"
+DISABLED_SERVICES="dnsmasq firewall odhcpd"
 
-FILES=""
-DISABLED_SERVICES=""
+_merge_files() {
+    if [ -d /build-assets ] && [ "$(ls -A /build-assets 2>/dev/null)" ]; then
+        local _merge_dir="/tmp/files-merged"
+        rm -rf "${_merge_dir}"
+        cp -a /assets/openwrt/. "${_merge_dir}/"
+        cp -a /build-assets/. "${_merge_dir}/"
+        echo "${_merge_dir}"
+    else
+        echo "/assets/openwrt"
+    fi
+}
+
+# Core system utilities
+_PKG_BASE=" \
+    bash \
+    curl \
+    ethtool \
+    iperf3 \
+    luci \
+    luci-app-watchcat \
+    luci-ssl \
+    nano \
+    openssh-sftp-server \
+    watchcat \
+"
+# Wifi Mesh
+_PKG_MESH=" \
+    batctl-full \
+    kmod-batman-adv \
+    luci-proto-batman-adv \
+"
+
+# ATH10K Drivers (Asus MAP)
+_PKG_ATH10K=" \
+    -ath10k-firmware-qca4019-ct \
+    -ath10k-firmware-qca9888-ct \
+    ath10k-firmware-qca4019 \
+    ath10k-firmware-qca9888 \
+    -kmod-ath10k-ct \
+    kmod-ath10k \
+"
+# Full hostapd/wpad with 802.11r (Fast Transition) support
+_PKG_WPAD=" \
+    -wpad-basic-mbedtls \
+    -wpad-basic-wolfssl \
+    wpad-wolfssl \
+"
+
+# Local statistics (VLAN and client-level bandwidth)
+_PKG_STATS=" \
+    luci-app-nlbwmon \
+"
+
+_PKG_CUDY=" \
+    -dnsmasq \
+    -luci-app-firewall \
+    -luci-app-dhcp \
+    -odhcpd-ipv6only \
+    -odhcp6c \
+    -luci-proto-ppp \
+    -luci-proto-ipv6 \
+    -ppp \
+    -ppp-mod-pppoe \
+    -kmod-ppp \
+    -kmod-pppoe \
+    -kmod-pppox \
+    -kmod-slhc \
+    -kmod-ebtables-ipv6 \
+    "
+
+# Decentralized steering and cluster discovery (802.11k/v assist)
+_PKG_ROAMING=" \
+    dawn \
+    luci-app-dawn \
+    umdns \
+"
+
+_PKG_SPEEDTEST=" \
+    speedtestpp \
+"
+
+_PKG_EBTABLES=" \
+    ebtables \
+    kmod-ebtables \
+    kmod-ebtables-ipv4 \
+    kmod-ebtables-ipv6 \
+"
+
+_PKG_MONITORING=" \
+    collectd \
+    collectd-mod-cpu \
+    collectd-mod-memory \
+    collectd-mod-load \
+    collectd-mod-wireless \
+    collectd-mod-uptime \
+    luci-app-statistics \
+"
+
+_generate_cudy_provisioning() {
+    local base="/tmp/.cudy-files"
+    local out="${base}/etc/uci-defaults/99-custom-provisioning"
+    mkdir -p "$(dirname "${out}")"
+    rm -f "${out}"
+
+    # copy shared assets (all/) then profile-specific (cudy/) on top
+    if [ -d "/assets/all" ]; then
+        cp -a /assets/all/. "${base}/" 2>/dev/null || true
+    fi
+    if [ -d "/assets/cudy" ] && [ "$(ls -A /assets/cudy 2>/dev/null)" ]; then
+        cp -a /assets/cudy/. "${base}/" 2>/dev/null || true
+    fi
+
+    wr() { printf '%s\n' "$1" >> "${out}"; }
+
+    wr '#!/bin/sh'
+    wr ''
+
+    # COMMON
+    wr 'for svc in dnsmasq odhcpd firewall watchcat; do'
+    wr '    [ -f "/etc/init.d/$svc" ] && /etc/init.d/"$svc" disable'
+    wr '    [ -f "/etc/init.d/$svc" ] && /etc/init.d/"$svc" stop 2>/dev/null || true'
+    wr 'done'
+    wr 'rm -f /etc/config/firewall /etc/config/dhcp /etc/config/watchcat 2>/dev/null || true'
+    wr ''
+    wr "uci set network.lan.proto='dhcp'"
+    wr 'uci del network.lan.ipaddr 2>/dev/null'
+    wr 'uci del network.lan.netmask 2>/dev/null'
+    wr 'uci del network.lan.gateway 2>/dev/null'
+    wr 'uci del network.lan.dns 2>/dev/null'
+    wr 'uci del network.lan.ip6assign 2>/dev/null'
+    wr 'uci commit network'
+    wr '/etc/init.d/network reload'
+    wr ''
+    wr "uci set system.@system[0].timezone='PST8PDT,M3.2.0,M11.1.0'"
+    wr "uci set system.@system[0].zonename='America/Vancouver'"
+    wr "uci set luci.@core[0].lang='en' 2>/dev/null || uci set luci.core.lang='en'"
+    wr "uci set system.@system[0].clock_hourcycle='h24'"
+    wr 'uci commit system'
+    wr 'uci commit luci 2>/dev/null || true'
+    if [ -n "${ROOT_PASSWORD}" ]; then
+        wr "(echo '${ROOT_PASSWORD}'; echo '${ROOT_PASSWORD}') | passwd 2>/dev/null || true"
+        >&2 echo "  ROOT_PASSWORD baked in"
+    fi
+    wr ''
+    wr 'rm -rf /usr/share/ucode/luci/admin/network/dhcp* /usr/share/ucode/luci/admin/network/odhcp* 2>/dev/null || true'
+    wr 'rm -f /tmp/luci-indexcache /tmp/luci-modulecache/* 2>/dev/null || true'
+    wr '/etc/init.d/rpcd reload 2>/dev/null || true'
+    wr ''
+    _build_date=$(TZ=America/Vancouver date "+%Y-%m-%d %H:%M:%S %Z" 2>/dev/null || date "+%Y-%m-%d %H:%M:%S")
+    echo "${_build_date}" > "${base}/etc/buildinfo"
+    wr ''
+    wr 'rm -f /etc/profile.d/apk-cheatsheet.sh 2>/dev/null || true'
+    wr "cat > /etc/profile.d/cheatsheet.sh << 'XEOF'"
+    wr 'export PATH="/usr/local/bin:$PATH"'
+    wr 'status 2>/dev/null || true'
+    wr 'printf "  \033[33m%-19s\033[0m %s  |  \033[33m%-11s\033[0m %s  |  %-16s  |  %-15s\n" "help" "this menu" "status" "dashboard" "restart-network" "apply-ebtables"'
+    wr 'printf "  \033[33m%-19s\033[0m %s  |  \033[33m%-22s\033[0m %s\n" "logread -f" "follow log" "iwinfo wlan0 assoclist" "clients/RSSI"'
+    wr "echo"
+    wr "XEOF"
+    wr ''
+
+    # check if any NETWORK_*_VLAN env vars exist
+    _have_vlans=0
+    for _ni in $(seq 99); do
+        _key="NETWORK_$(printf '%02d' $_ni)_VLAN"
+        [ -n "${!_key}" ] && { _have_vlans=1; break; }
+    done
+
+    if [ "${_have_vlans}" = "0" ]; then
+        wr "uci set wireless.radio0.disabled='0'"
+        wr "uci set wireless.radio1.disabled='0'"
+        wr 'uci commit wireless'
+        wr 'wifi reload'
+        wr '[ -f /etc/init.d/dawn ] && /etc/init.d/dawn enable && /etc/init.d/dawn start'
+        wr 'exit 0'
+        >&2 echo "  Simple mode (no NETWORK_ vars)"
+        echo "${base}"
+        return
+    fi
+
+    # COMPLEX PATH
+    wr 'MAC=$(cat /sys/class/net/eth0/address 2>/dev/null | tr a-f A-F)'
+    wr 'case "$MAC" in'
+    for _ai in $(seq 99); do
+        _key="AP_$(printf '%02d' $_ai)_MAC"; _mac="${!_key}"
+        _key="AP_$(printf '%02d' $_ai)_HOSTNAME"; _host="${!_key}"
+        [ -z "${_mac}" ] && continue
+        [ -z "${_host}" ] && continue
+        wr "    ${_mac}) HOSTNAME=\"${_host}\" ;;"
+    done
+    wr '    *) HOSTNAME="ap-unknown" ;;'
+    wr 'esac'
+    wr 'uci set system.@system[0].hostname="$HOSTNAME"'
+    wr 'uci commit system'
+    wr '/etc/init.d/system reload'
+    wr 'AP_NUM=$(echo "$HOSTNAME" | tr -cd "0-9")'
+    wr '[ -z "$AP_NUM" ] && AP_NUM=99'
+    _octet_base="${AP_OCTET_BASE:-10}"
+    wr "OCTET=\$(( ${_octet_base} + AP_NUM ))"
+    wr ''
+    wr ''
+    wr "uci set network.@device[0].multicast_snooping='0' 2>/dev/null || true"
+    wr 'echo 0 > /sys/devices/virtual/net/br-lan/bridge/multicast_snooping 2>/dev/null || true'
+    wr ''
+
+    # VLAN INTERFACES
+    for _ni in $(seq 99); do
+        _key="NETWORK_$(printf '%02d' $_ni)_VLAN"
+        [ -n "${!_key}" ] || continue
+        vid="${!_key}"
+        _key="NETWORK_$(printf '%02d' $_ni)_NAME"; name="${!_key}"
+        _key="NETWORK_$(printf '%02d' $_ni)_NETWORK"; net="${!_key}"
+        _key="NETWORK_$(printf '%02d' $_ni)_MASK"; mask="${!_key}"
+        _key="NETWORK_$(printf '%02d' $_ni)_IP"; ip="${!_key}"
+        _key="NETWORK_$(printf '%02d' $_ni)_GATEWAY"; gw="${!_key}"
+        _key="NETWORK_$(printf '%02d' $_ni)_DNS"; dns="${!_key}"
+        _key="NETWORK_$(printf '%02d' $_ni)_EXCLUDE_APS"; _exclude="${!_key:-}"
+
+        if [ -n "${_exclude}" ]; then
+            wr 'case " '"${_exclude}"' " in'
+            wr '  *" ${HOSTNAME} "*) ;;'
+            wr '  *)'
+        fi
+        wr "uci set network.vlan${vid}=device"
+        wr "uci set network.vlan${vid}.name='br-lan.${vid}'"
+        wr "uci set network.vlan${vid}.type='8021q'"
+        wr "uci set network.vlan${vid}.ifname='br-lan'"
+        wr "uci set network.vlan${vid}.vid='${vid}'"
+        wr "uci set network.${name}=interface"
+        wr "uci set network.${name}.device='br-lan.${vid}'"
+        if [ -n "${ip}" ]; then
+            wr "uci set network.${name}.proto='static'"
+            wr "uci set network.${name}.ipaddr='${ip}'"
+            wr "uci set network.${name}.netmask='${mask:-255.255.255.0}'"
+            wr "uci set network.${name}.gateway='${gw:-${net}.1}'"
+            wr "uci add_list network.${name}.dns='${dns:-${net}.1}'"
+        else
+            wr "uci set network.${name}.proto='dhcp'"
+        fi
+        wr "uci set network.${name}.delegate='0'"
+        if [ -n "${_exclude}" ]; then
+            wr '  ;;'
+            wr 'esac'
+        fi
+        >&2 echo "  NETWORK ${vid} → ${name} ($([ -n "${ip}" ] && echo "static ${ip}" || echo "DHCP"))"
+    done
+    wr 'uci commit network'
+    wr ''
+
+    # --- WATCHCAT: per-VLAN gateway ping (opt-in via NETWORK_XX_WATCHCAT=true) ---
+    _wc_any=0
+    for _ni in $(seq 99); do
+        _key="NETWORK_$(printf '%02d' $_ni)_WATCHCAT"
+        [ "${!_key}" = "true" ] && { _wc_any=1; break; }
+    done
+    if [ "${_wc_any}" = "1" ]; then
+        wr "# clear default watchcat config, then add per-VLAN pings"
+        wr "while uci get watchcat.@watchcat[0] >/dev/null 2>&1; do uci delete watchcat.@watchcat[0]; done"
+        for _ni in $(seq 99); do
+            _key="NETWORK_$(printf '%02d' $_ni)_VLAN"
+            [ -n "${!_key}" ] || continue
+            vid="${!_key}"
+            _key="NETWORK_$(printf '%02d' $_ni)_WATCHCAT"
+            [ "${!_key}" = "true" ] || continue
+            _key="NETWORK_$(printf '%02d' $_ni)_GATEWAY"; gw="${!_key}"
+            _key="NETWORK_$(printf '%02d' $_ni)_NAME"; n="${!_key}"
+            _key="NETWORK_$(printf '%02d' $_ni)_WATCHCAT_HOSTS"; wc_hosts="${!_key}"
+            _key="NETWORK_$(printf '%02d' $_ni)_WATCHCAT_PERIOD"; wc_period="${!_key}"
+            _key="NETWORK_$(printf '%02d' $_ni)_WATCHCAT_FAILURES"; wc_fails="${!_key}"
+            _key="NETWORK_$(printf '%02d' $_ni)_WATCHCAT_DELAY"; wc_delay="${!_key}"
+            _key="NETWORK_$(printf '%02d' $_ni)_EXCLUDE_APS"; wc_exclude="${!_key:-}"
+            [ -z "${wc_hosts}" ] && wc_hosts="${gw}"
+            [ -z "${wc_hosts}" ] && continue
+            if [ -n "${wc_exclude}" ]; then
+                wr 'case " '"${wc_exclude}"' " in'
+                wr '  *" ${HOSTNAME} "*) ;;'
+                wr '  *)'
+            fi
+            wr "uci add watchcat watchcat"
+            wr "uci set watchcat.@watchcat[-1].mode='ping'"
+            wr "uci set watchcat.@watchcat[-1].pinghosts='${wc_hosts}'"
+            wr "uci set watchcat.@watchcat[-1].ping_interval='${wc_period:-1m}'"
+            wr "uci set watchcat.@watchcat[-1].ping_failures='${wc_fails:-3}'"
+            wr "uci set watchcat.@watchcat[-1].reboot='1'"
+            wr "uci set watchcat.@watchcat[-1].forcedelay='${wc_delay:-15}'"
+            wr "uci set watchcat.@watchcat[-1].description='${n}'"
+            if [ -n "${wc_exclude}" ]; then
+                wr '  ;;'
+                wr 'esac'
+            fi
+            >&2 echo "  WATCHCAT ${n}: pinging ${wc_hosts} every ${wc_period:-1m}, reboot after ${wc_fails:-3} failures"
+        done
+        wr 'uci commit watchcat'
+        wr '/etc/init.d/watchcat enable'
+        wr '/etc/init.d/watchcat restart'
+        wr ''
+    fi
+
+    # --- BRIDGE VLAN filtering: maps WiFi BSS ports to correct VLANs ---
+    wr "uci set network.@device[0].vlan_filtering='1'"
+    _ap_idx0=0
+    _ap_idx1=0
+    _bss_vlans=""   # colon-separated: "vid1:bssdev1,vid2:bssdev2,..."
+
+    # --- EBTABLES client isolation (opt-in per VLAN via EB_ENABLED=true) ---
+    _eb_any=0
+    for _ni in $(seq 99); do
+        _key="NETWORK_$(printf '%02d' $_ni)_EB_ENABLED"
+        [ "${!_key}" = "true" ] && { _eb_any=1; break; }
+    done
+    if [ "${_eb_any}" = "1" ]; then
+        wr 'ebtables -F FORWARD 2>/dev/null || true'
+        for _ni in $(seq 99); do
+            _key="NETWORK_$(printf '%02d' $_ni)_VLAN"
+            [ -n "${!_key}" ] || continue
+            vid="${!_key}"
+            _key="NETWORK_$(printf '%02d' $_ni)_NAME"; n="${!_key}"
+            _key="NETWORK_$(printf '%02d' $_ni)_NETWORK"; net="${!_key}"
+            _key="NETWORK_$(printf '%02d' $_ni)_MASK"; mask="${!_key}"
+            _key="NETWORK_$(printf '%02d' $_ni)_GATEWAY"; gw="${!_key}"
+            _key="NETWORK_$(printf '%02d' $_ni)_EB_ALLOW"; eb_allow="${!_key}"
+            _key="NETWORK_$(printf '%02d' $_ni)_EB_ENABLED"; eb_enabled="${!_key}"
+            _key="NETWORK_$(printf '%02d' $_ni)_EB_ALLOW_SRC"; eb_allow_src="${!_key}"
+            _key="NETWORK_$(printf '%02d' $_ni)_EXCLUDE_APS"; eb_exclude="${!_key:-}"
+            [ "${eb_enabled}" = "true" ] || continue
+            [ -z "${gw}" ] && gw="${net}.1"
+
+            # compute CIDR from dotted mask
+            _cidr=0
+            IFS=. read -r _a _b _c _d <<< "${mask:-255.255.255.0}"
+            for _o in $_a $_b $_c $_d; do
+                case $_o in 255) _cidr=$((_cidr+8));; 254) _cidr=$((_cidr+7));; 252) _cidr=$((_cidr+6));;
+                248) _cidr=$((_cidr+5));; 240) _cidr=$((_cidr+4));; 224) _cidr=$((_cidr+3));;
+                192) _cidr=$((_cidr+2));; 128) _cidr=$((_cidr+1));; esac
+            done
+            _subnet="${net}.0/${_cidr}"
+
+            if [ -n "${eb_exclude}" ]; then
+                wr 'case " '"${eb_exclude}"' " in'
+                wr '  *" ${HOSTNAME} "*) ;;'
+                wr '  *)'
+            fi
+            wr "# EBTABLES ${n} — client isolation"
+            wr "ebtables -A FORWARD -p ARP -j ACCEPT 2>/dev/null || true"
+            wr "ebtables -A FORWARD -p IPv4 --ip-src ${gw} --ip-dst ${_subnet} -j ACCEPT 2>/dev/null || true"
+            wr "ebtables -A FORWARD -p IPv4 --ip-dst ${gw} -j ACCEPT 2>/dev/null || true"
+
+            # destination-based allow (specific servers on this VLAN)
+            if [ -n "${eb_allow}" ]; then
+                IFS=',' read -ra _al <<< "${eb_allow}"
+                for _entry in "${_al[@]}"; do
+                    _ip="${_entry%:*}"
+                    _port="${_entry#*:}"
+                    [ "${_port}" = "${_ip}" ] && _port=""
+                    if [ -n "${_port}" ]; then
+                        wr "ebtables -A FORWARD -p IPv4 --ip-src ${_subnet} --ip-dst ${_ip} --ip-proto tcp --ip-dport ${_port} -j ACCEPT 2>/dev/null || true"
+                        wr "ebtables -A FORWARD -p IPv4 --ip-src ${_ip} --ip-dst ${_subnet} --ip-proto tcp --ip-sport ${_port} -j ACCEPT 2>/dev/null || true"
+                    else
+                        wr "ebtables -A FORWARD -p IPv4 --ip-src ${_subnet} --ip-dst ${_ip} -j ACCEPT 2>/dev/null || true"
+                        wr "ebtables -A FORWARD -p IPv4 --ip-src ${_ip} --ip-dst ${_subnet} -j ACCEPT 2>/dev/null || true"
+                    fi
+                    >&2 echo "  EBTABLES ${n}: allow dest ${_ip}${_port:+:${_port}}"
+                done
+            fi
+
+            # source-based exceptions (specific clients that bypass isolation)
+            if [ -n "${eb_allow_src}" ]; then
+                IFS=',' read -ra _sl <<< "${eb_allow_src}"
+                for _entry in "${_sl[@]}"; do
+                    _ip="${_entry%:*}"
+                    _port="${_entry#*:}"
+                    [ "${_port}" = "${_ip}" ] && _port=""
+                    if [ -n "${_port}" ]; then
+                        wr "ebtables -A FORWARD -p IPv4 --ip-src ${_ip} --ip-dst ${_subnet} --ip-proto tcp --ip-dport ${_port} -j ACCEPT 2>/dev/null || true"
+                        wr "ebtables -A FORWARD -p IPv4 --ip-src ${_subnet} --ip-dst ${_ip} --ip-proto tcp --ip-sport ${_port} -j ACCEPT 2>/dev/null || true"
+                    else
+                        wr "ebtables -A FORWARD -p IPv4 --ip-src ${_ip} --ip-dst ${_subnet} -j ACCEPT 2>/dev/null || true"
+                    fi
+                    >&2 echo "  EBTABLES ${n}: allow src ${_ip}${_port:+:${_port}} → all"
+                done
+            fi
+
+            wr "ebtables -A FORWARD -p IPv4 --ip-src ${_subnet} --ip-dst ${_subnet} -j DROP 2>/dev/null || true"
+            >&2 echo "  EBTABLES ${n}: isolation ON (gateway ${gw})"
+            if [ -n "${eb_exclude}" ]; then
+                wr '  ;;'
+                wr 'esac'
+            fi
+        done
+        wr ''
+    fi
+    wr ''
+
+    # WIRELESS
+    wr 'wifi config > /etc/config/wireless 2>/dev/null || wifi detect > /etc/config/wireless 2>/dev/null'
+    wr 'while uci get wireless.@wifi-iface[0] >/dev/null 2>&1; do'
+    wr '    uci delete wireless.@wifi-iface[0]'
+    wr 'done'
+    wr 'for radio in radio0 radio1; do'
+    wr '    if uci get wireless.${radio} >/dev/null 2>&1; then'
+    wr "        uci set wireless.\${radio}.country='CA'"
+    wr "        uci set wireless.\${radio}.cell_density='0'"
+    wr "        uci set wireless.\${radio}.disabled='0'"
+    wr '    fi'
+    wr 'done'
+    wr "uci set wireless.radio0.channel='auto' 2>/dev/null || true"
+    wr "uci set wireless.radio0.txpower='' 2>/dev/null || true"
+    wr "uci set wireless.radio1.channel='36' 2>/dev/null || true"
+    wr "uci set wireless.radio1.txpower='20' 2>/dev/null || true"
+    wr ''
+
+    for _ni in $(seq 99); do
+        _key="SSID_$(printf '%02d' $_ni)_BAND"
+        [ -n "${!_key}" ] || continue
+        band="${!_key}"
+        _key="SSID_$(printf '%02d' $_ni)_NAME"; ssid_name="${!_key}"
+        _key="SSID_$(printf '%02d' $_ni)_NETWORK"; ssid_net="${!_key}"
+        _key="SSID_$(printf '%02d' $_ni)_KEY"; ssid_key="${!_key}"
+        _key="SSID_$(printf '%02d' $_ni)_ENCRYPTION"; enc="${!_key:-sae-mixed}"
+        _key="SSID_$(printf '%02d' $_ni)_MOBILITY_DOMAIN"; mob="${!_key}"
+        _key="SSID_$(printf '%02d' $_ni)_BEACON_INT"; bi="${!_key:-100}"
+        _key="SSID_$(printf '%02d' $_ni)_IE_R"; ie_r="${!_key:-1}"
+        _key="SSID_$(printf '%02d' $_ni)_IE_K"; ie_k="${!_key:-1}"
+        _key="SSID_$(printf '%02d' $_ni)_IE_V"; ie_v="${!_key:-1}"
+        _key="SSID_$(printf '%02d' $_ni)_EXCLUDE_APS"; _exclude="${!_key:-}"
+
+        # resolve VLAN ID from network name
+        _vid=""
+        for _ni2 in $(seq 99); do
+            _key2="NETWORK_$(printf '%02d' $_ni2)_NAME"
+            [ "${!_key2}" = "${ssid_net}" ] && {
+                _key2="NETWORK_$(printf '%02d' $_ni2)_VLAN"
+                _vid="${!_key2}"; break
+            }
+        done
+        for radio in ${band}; do
+            [ "$radio" = "both" ] && radio="2g 5g"
+            for b in ${radio}; do
+                if [ -n "${_exclude}" ]; then
+                    wr "case \" ${_exclude} \" in"
+                    wr '  *" ${HOSTNAME}:'"${b}"' "*|*" ${HOSTNAME} "*) ;;'
+                    wr '  *)'
+                fi
+                [ "$b" = "2g" ] && dev="radio0" || dev="radio1"
+                if [ "$b" = "2g" ]; then
+                    _ap="phy0-ap${_ap_idx0}"; _ap_idx0=$((_ap_idx0+1))
+                else
+                    _ap="phy1-ap${_ap_idx1}"; _ap_idx1=$((_ap_idx1+1))
+                fi
+                [ -n "${_vid}" ] && _bss_vlans="${_bss_vlans}${_vid}:${_ap},"
+                wr "uci set wireless.${ssid_net}_${b}=wifi-iface"
+                wr "uci set wireless.${ssid_net}_${b}.device='${dev}'"
+                wr "uci set wireless.${ssid_net}_${b}.network='${ssid_net}'"
+                wr "uci set wireless.${ssid_net}_${b}.mode='ap'"
+                wr "uci set wireless.${ssid_net}_${b}.ssid='${ssid_name}'"
+                wr "uci set wireless.${ssid_net}_${b}.encryption='${enc}'"
+                wr "uci set wireless.${ssid_net}_${b}.key='${ssid_key}'"
+                wr "uci set wireless.${ssid_net}_${b}.beacon_int='${bi}'"
+                wr "uci set wireless.${ssid_net}_${b}.ieee80211r='${ie_r}'"
+                [ -n "${mob}" ] && wr "uci set wireless.${ssid_net}_${b}.mobility_domain='${mob}'"
+                wr "uci set wireless.${ssid_net}_${b}.ft_over_ds='0'"
+                wr "uci set wireless.${ssid_net}_${b}.ft_psk_generate_local='1'"
+                wr "uci set wireless.${ssid_net}_${b}.ieee80211k='${ie_k}'"
+                wr "uci set wireless.${ssid_net}_${b}.ieee80211v='${ie_v}'"
+                wr "uci set wireless.${ssid_net}_${b}.ifname='${_ap}'"
+                if [ -n "${_exclude}" ]; then
+                    wr '  ;;'
+                    wr 'esac'
+                fi
+                wr ''
+            done
+        done
+        >&2 echo "  SSID ${ssid_name} → ${ssid_net} (${band})"
+    done
+    wr 'uci commit wireless'
+    wr 'wifi reload'
+    wr ''
+
+    # bridge-vlan: tag ALL VLAN traffic on the uplink + WiFi BSS ports
+    >&2 echo "  BRIDGE-VLAN: tagging all VLANs (${_bss_vlans%,})"
+    for _ni in $(seq 99); do
+        _key="NETWORK_$(printf '%02d' $_ni)_VLAN"
+        [ -n "${!_key}" ] || continue
+        _bv="${!_key}"
+        _key="NETWORK_$(printf '%02d' $_ni)_TAGGED"; _tagged="${!_key:-true}"
+        wr "uci add network bridge-vlan"
+        wr "uci set network.@bridge-vlan[-1].device='br-lan'"
+        wr "uci set network.@bridge-vlan[-1].vlan='${_bv}'"
+        if [ "${_tagged}" = "false" ]; then
+            wr "uci add_list network.@bridge-vlan[-1].ports='eth0:u*'"
+        else
+            wr "uci add_list network.@bridge-vlan[-1].ports='eth0:t'"
+        fi
+        # add BSS ports if any SSID uses this VLAN
+        _oldifs="$IFS"; IFS=','
+        for _pe in ${_bss_vlans}; do
+            [ -z "${_pe}" ] && continue
+            _pv="${_pe%%:*}"
+            [ "${_pv}" = "${_bv}" ] || continue
+            _bd="${_pe#*:}"
+            [ -z "${_bd}" ] && continue
+            wr "uci add_list network.@bridge-vlan[-1].ports='${_bd}:u*'"
+        done
+        IFS="${_oldifs}"
+    done
+    wr 'uci commit network'
+    wr ''
+    wr ''
+
+    # Dawn cluster auth — shared_key/iv used when use_symm_enc=1
+    wr 'uci -q delete dawn.@network[0] 2>/dev/null || true'
+    wr 'uci add dawn network'
+    [ -n "${DAWN_SHARED_KEY:-}" ] && wr "uci set dawn.@network[-1].shared_key='${DAWN_SHARED_KEY}'"
+    [ -n "${DAWN_IV:-}" ] && wr "uci set dawn.@network[-1].iv='${DAWN_IV}'"
+    [ -n "${DAWN_USE_SYMM_ENC:-}" ] && wr "uci set dawn.@network[-1].use_symm_enc='${DAWN_USE_SYMM_ENC}'"
+    [ -n "${DAWN_BROADCAST_PORT:-}" ] && wr "uci set dawn.@network[-1].broadcast_port='${DAWN_BROADCAST_PORT}'"
+    wr "uci set dawn.@network[-1].broadcast_ip='${DAWN_BROADCAST_IP:-255.255.255.255}'"
+    wr 'uci commit dawn'
+    wr '/etc/init.d/network restart'
+    wr '/etc/init.d/dawn enable'
+    wr '/etc/init.d/dawn restart'
+    wr 'exit 0'
+
+    >&2 echo "  Generated: ${out}"
+    echo "${base}"
+}
 
 start_dir=$(pwd)
+OPENWRT_MIRROR=${OPENWRT_MIRROR:-"https://downloads.openwrt.org"}
+
 build_image() {
-    echo "** Building OpenWRT ${VERSION} for ${PROFILE}"
+    if [ "${FILES}" = "/assets/openwrt" ]; then
+        _FILES="$(_merge_files)"
+    elif [ -n "${FILES}" ]; then
+        _FILES="${FILES}"
+    else
+        _FILES=""
+    fi
+    echo "** Building OpenWRT ${OPENWRT_VERSION} for ${PROFILE}"
+    echo "** MIRROR: ${OPENWRT_MIRROR}"
+    echo "** PACKAGES: ${PACKAGES}"
+    echo "** DISABLED_SERVICES: ${DISABLED_SERVICES}"
+    echo "** FILES: ${_FILES}"
+    if [ -n "${_FILES}" ] && [ "${_FILES}" != "/assets/openwrt" ]; then
+        echo "** FILES contents:"
+        while IFS= read -r f; do
+            echo "  /${f#${_FILES}/}:"
+            sed 's/^/    /' "${f}"
+        done < <(find "${_FILES}" -type f | sort)
+    fi
+    _MAKEFILES="${_FILES:-files}"
     make image \
          PROFILE="${PROFILE}" \
          PACKAGES="${PACKAGES}" \
-         FILES="${FILES}" \
-         DISABLED_SERVICES="${DISABLED_SERVICES}"
+         FILES="${_MAKEFILES}" \
+         DISABLED_SERVICES="${DISABLED_SERVICES}" \
+         MIRROR="${OPENWRT_MIRROR}"
 }
 
 if [ -z $1 ] ; then
@@ -51,8 +578,9 @@ $(basename $0) MODEL
 
 MODEL:
   - asus       - Asus MAP AC-2200 (Lyra)
-  - linksys    - Linksys VELOP WHW01
   - wavlink    - Wavlink D6
+  - cudy       - Cudy AP3000 v1
+  - cudy-wall  - Cudy AP3000 Wall v1
 
 EOF
 fi
@@ -62,6 +590,7 @@ if [ -n "${1}" ] ; then
     build_date=$(TZ=${TIMEZONE} date +%Y%m%d-%H%M%S)
     case "${1}" in
         asus )
+            PACKAGES="${_PKG_BASE} ${_PKG_MESH} ${_PKG_ATH10K} ${_PKG_WPAD} ${_PKG_SPEEDTEST}"
             cd /src/ipq40xx
             mkdir -p tmp
             PROFILE="asus_map-ac2200"
@@ -69,20 +598,37 @@ if [ -n "${1}" ] ; then
             mv bin/targets/ipq40xx/generic /data/builds/${build_date}-${OPENWRT_VERSION}_asus_map_ac2200
             echo "The File is /data/builds/${build_date}-asus_map_ac2200"
         ;;
-        linksys )
-            cd /src/ipq40xx
-            mkdir -p tmp
-            PROFILE="linksys_whw01"
-            build_image
-            mv bin/targets/ipq40xx/generic /data/builds/${build_date}-${OPENWRT_VERSION}_linksys_whw01
-            echo "The File is /data/builds/${build_date}-linksys_whw01"
-        ;;
         wavlink )
+            PACKAGES="${_PKG_BASE} ${_PKG_MESH} ${_PKG_ATH10K} ${_PKG_WPAD} ${_PKG_SPEEDTEST}"
             cd /src/ramips_mt7621
             mkdir -p tmp
             PROFILE="wavlink_wl-wn531a6"
             build_image
             mv bin/targets/ramips/mt7621 /data/builds/${build_date}-${OPENWRT_VERSION}_wavilnk_d6_ramips_mt7621
+        ;;
+        cudy )
+            # dumb AP — DHCP from upstream, no local DNS/DHCP/firewall (ebtables used for client isolation)
+            DISABLED_SERVICES="dnsmasq firewall odhcpd"
+            FILES="$(_generate_cudy_provisioning)"
+            PACKAGES="${_PKG_BASE} ${_PKG_CUDY} ${_PKG_WPAD} ${_PKG_ROAMING} ${_PKG_STATS} ${_PKG_EBTABLES} ${_PKG_MONITORING}"
+            cd /src/mediatek/filogic || exit 1
+            mkdir -p tmp
+            PROFILE="cudy_ap3000-v1"
+            build_image
+            mv bin/targets/mediatek/filogic "/data/builds/${build_date}-${OPENWRT_VERSION}_cudy_ap3000"
+            echo "The File is /data/builds/${build_date}-cudy_ap3000"
+        ;;
+        cudy-wall )
+            # dumb AP — DHCP from upstream, no local DNS/DHCP/firewall (ebtables used for client isolation)
+            DISABLED_SERVICES="dnsmasq firewall odhcpd"
+            FILES="$(_generate_cudy_provisioning)"
+            PACKAGES="${_PKG_BASE} ${_PKG_CUDY} ${_PKG_WPAD} ${_PKG_ROAMING} ${_PKG_STATS} ${_PKG_EBTABLES} ${_PKG_MONITORING}"
+            cd /src/mediatek/filogic || exit 1
+            mkdir -p tmp
+            PROFILE="cudy_ap3000wall-v1"
+            build_image
+            mv bin/targets/mediatek/filogic "/data/builds/${build_date}-${OPENWRT_VERSION}_cudy_ap3000wall"
+            echo "The File is /data/builds/${build_date}-cudy_ap3000wall"
         ;;
     esac
     cd ${start_dir}

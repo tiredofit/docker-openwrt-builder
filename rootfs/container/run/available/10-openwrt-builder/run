@@ -1,0 +1,14 @@
+#!/command/with-contenv bash
+# SPDX-FileCopyrightText: © 2026 Nfrastack <code@nfrastack.com>
+#
+# SPDX-License-Identifier: MIT
+
+source /container/base/functions/container/init
+prepare_service 10-openwrt-builder
+SERVICE_NAME="openwrt-builder"
+check_container_initialized
+
+liftoff
+
+print_start "OpenWRT Builder ready"
+exec sleep infinity

@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: © 2026 Nfrastack <code@nfrastack.com>
+#
+# SPDX-License-Identifier: MIT
+#
+# Safely restart networking with a rollback timer.
+# Backups go to /root/config.backup/network-YYYYMMDD-HHMMSS
+#
+# Usage: restart-network [TIMEOUT]
+#        restart-network --confirm   # skip timer, apply immediately
+#        restart-network --revert    # manually revert to latest backup
+#        restart-network --list      # show available backups
+
+BACKUP_DIR="/root/config.backup"
+TIMEOUT=${1:-230}
+NOW=$(date +%Y%m%d-%H%M%S)
+
+mkdir -p "${BACKUP_DIR}"
+
+# find the latest backup file
+latest_backup() {
+    ls -t "${BACKUP_DIR}"/network-* 2>/dev/null | head -1
+}
+
+if [ "$1" = "--list" ]; then
+    echo "Available backups:"
+    ls -1 "${BACKUP_DIR}"/network-* 2>/dev/null || echo "  (none)"
+    exit 0
+fi
+
+if [ "$1" = "--revert" ]; then
+    LB=$(latest_backup)
+    if [ -n "${LB}" ]; then
+        echo "Reverting to ${LB}..."
+        cp "${LB}" /etc/config/network
+        /etc/init.d/network restart
+        echo "Reverted."
+    else
+        echo "No backup found in ${BACKUP_DIR}/"
+    fi
+    exit 0
+fi
+
+if [ "$1" = "--confirm" ]; then
+    echo "Applying network config (no rollback)..."
+    cp /etc/config/network "${BACKUP_DIR}/network-${NOW}"
+    /etc/init.d/network restart
+    echo "Done. Backup saved: network-${NOW}"
+    exit 0
+fi
+
+# Normal flow: backup + apply + wait + confirm or rollback
+cp /etc/config/network "${BACKUP_DIR}/network-${NOW}"
+echo "Backup saved: network-${NOW}"
+
+echo "Applying new network config..."
+/etc/init.d/network restart
+
+echo ""
+echo "You have ${TIMEOUT} seconds to verify connectivity."
+echo "Press ENTER to confirm — if you don't, it rolls back."
+echo ""
+
+if read -t "${TIMEOUT}" -p "> " 2>/dev/null; then
+    echo "Confirmed. Keeping new config."
+else
+    echo ""
+    echo "TIMEOUT — rolling back to network-${NOW}"
+    cp "${BACKUP_DIR}/network-${NOW}" /etc/config/network
+    /etc/init.d/network restart
+    echo "Rolled back."
+fi

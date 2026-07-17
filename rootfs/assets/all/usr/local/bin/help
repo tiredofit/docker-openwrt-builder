@@ -1,0 +1,15 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: © 2026 Nfrastack <code@nfrastack.com>
+#
+# SPDX-License-Identifier: MIT
+
+echo "  Network              WiFi/Clients          System"
+echo "  ─────────────────────────────────────────────────────────────"
+echo "  restart-network      iwinfo wlan0 assoclist   logread -f"
+echo "  status               iwinfo wlan1 assoclist   free"
+echo "  ip r                 iwinfo wlan0 scan        df -h"
+echo "  bridge vlan show     ubus hostapd.wlan0 stat  ps | grep hostapd"
+echo "  bridge link          wifi down && wifi up     apk list-installed"
+echo "  ping -I br-vlan230   /etc/init.d/dawn restart ls /root/config.backup/"
+echo ""
+echo "  ebtables             apply-ebtables           ebtables -L FORWARD --Lc"
